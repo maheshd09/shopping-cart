@@ -1,44 +1,59 @@
 import { createSelector } from "@reduxjs/toolkit";
 import type { RootState } from "../../../store";
 import type { Product, CartItem } from "../../../types";
+import { offerRules } from "./offerRules";
 
 const products = (s: RootState) => s.products.items;
 const cart = (s: RootState) => s.cart.items;
 
 export const formatPrice = (v: number) => `£ ${v.toFixed(2)}`;
 
-const calculateLine = (product: Product, qty: number) => {
-  const regularTotal = product.price * qty;
+ const applyBestOffer = (
+  product: Product,
+  quantity: number,
+  cartItems: CartItem[]
+) => {
+  const regularTotal = product.price * quantity;
 
-  if (product.id === "bread" && qty >= 3) {
-    const groups = Math.floor(qty / 3);
-    const leftover = qty % 3;
-    const offerTotal = groups * 2.75 + leftover * product.price;
+    const rules = offerRules
+    .filter((r) => r.productId === product.id)
+    .sort((a, b) => a.priority - b.priority);
 
+  if (rules.length === 0) {
     return {
       regularTotal,
-      savings: regularTotal - offerTotal,
-      finalTotal: offerTotal,
-      offerDescription: "3 for £2.75",
+      savings: 0,
+      finalTotal: regularTotal,
+      offerDescription: undefined,
     };
   }
 
-  if (product.id === "butter") {
-    const discountedPrice = product.price * (2 / 3);
-    const finalTotal = discountedPrice * qty;
+   let best: { savings: number; finalTotal: number; description?: string } | null =
+    null;
 
+  for (const rule of rules) {
+    const result = rule.apply(product, quantity, cartItems);
+    if (!result) continue;
+
+    if (!best || result.savings > best.savings) {
+      best = result;
+    }
+  }
+
+  if (!best) {
     return {
       regularTotal,
-      savings: regularTotal - finalTotal,
-      finalTotal,
-      offerDescription: "1/3 off",
+      savings: 0,
+      finalTotal: regularTotal,
+      offerDescription: undefined,
     };
   }
 
   return {
     regularTotal,
-    savings: 0,
-    finalTotal: regularTotal,
+    savings: best.savings,
+    finalTotal: best.finalTotal,
+    offerDescription: best.description,
   };
 };
 
@@ -54,29 +69,30 @@ export interface CartLine {
 export const selectCartLines = createSelector(
   [cart, products],
   (items: CartItem[], prods: Product[]): CartLine[] =>
-    items.map((item: CartItem) => {
-      const p = prods.find((x: Product) => x.id === item.productId)!;
+    items.map((item) => {
+      const product = prods.find((p) => p.id === item.productId)!;
+
+      const applied = applyBestOffer(product, item.quantity, items);
+
       return {
-        product: p,
+        product,
         quantity: item.quantity,
-        ...calculateLine(p, item.quantity),
+        ...applied,
       };
     })
 );
 
 export const selectSubtotal = createSelector(
   selectCartLines,
-  (lines: CartLine[]) =>
-    lines.reduce((s: number, l: CartLine) => s + l.regularTotal, 0)
+  (lines) => lines.reduce((s, l) => s + l.regularTotal, 0)
 );
 
 export const selectSavings = createSelector(
   selectCartLines,
-  (lines: CartLine[]) =>
-    lines.reduce((s: number, l: CartLine) => s + l.savings, 0)
+  (lines) => lines.reduce((s, l) => s + l.savings, 0)
 );
 
 export const selectFinalTotal = createSelector(
   [selectSubtotal, selectSavings],
-  (sub: number, save: number) => sub - save
+  (subtotal, savings) => subtotal - savings
 );
